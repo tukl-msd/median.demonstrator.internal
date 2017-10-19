@@ -1,0 +1,37 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "xlnx,zynq-7000";
+	
+	fragment@0 {
+		target-path = "/";
+		__overlay__ {
+		
+			fclk_0: fclk@0 {
+				compatible = "jf,fclk-1.0.0";
+				
+				clocks = <&clkc 15>;
+				freq-in-hz = <160000000>;
+			};
+			fclk_1: fclk@1 {
+				compatible = "jf,fclk-1.0.0";
+				
+				clocks = <&clkc 16>;
+				freq-in-hz = <100000000>;
+			};
+			fclk_2: fclk@2 {
+				compatible = "jf,fclk-1.0.0";
+				
+				clocks = <&clkc 17>;
+				freq-in-hz = <200000000>;
+			};
+			fclk_3: fclk@3 {
+				compatible = "jf,fclk-1.0.0";
+				
+				clocks = <&clkc 18>;
+				freq-in-hz = <000000000>;
+			};
+		};
+	};
+};

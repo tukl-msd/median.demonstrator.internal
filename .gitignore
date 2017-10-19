@@ -1,0 +1,8 @@
+# Ignore unnecessary file in driver folders
+*.tmp_versions
+*.cmd
+*.mod.c
+*.o
+*.symvers
+*.order
+
