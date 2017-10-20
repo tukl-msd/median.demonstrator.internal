@@ -1,0 +1,53 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          system
+# Required-Start:    $remote_fs $syslog
+# Required-Stop:     $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: 
+# Description:       
+### END INIT INFO
+
+start_it_up()
+{
+  # Give write access to fpga for php
+  chmod a+w /sys/class/fpga_manager/fpga0/firmware
+
+  # Create Links for Examples - maybe some were deleted - should never be the case
+  for file in `ls /home/firmware`
+  do
+    ln -s -f /home/firmware/${file} /lib/firmware/${file}
+  done
+
+  # Mount config filesystem for overlays
+  mount -t configfs none /config
+}
+
+shut_it_down()
+{
+  umount /config
+}
+
+case "$1" in
+  start)
+    start_it_up
+  ;;
+  stop)
+#    shut_it_down
+  ;;
+  reload|force-reload)
+#    reload_it
+  ;;
+  restart)
+    shut_it_down
+    start_it_up
+  ;;
+  status)
+#    status_of_proc -p $PIDFILE $DAEMON $NAME && exit 0 || exit $?
+    ;;
+  *)
+#    echo "Usage: /etc/init.d/$NAME {start|stop|reload|restart|force-reload|status}" >&2
+    exit 2
+  ;;
+esac
