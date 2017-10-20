@@ -1,0 +1,1 @@
+To make the drivers available for the system create links in /lib/modules/4.9.0-xilinx-*/kernel/drivers/

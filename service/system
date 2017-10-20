@@ -22,10 +22,21 @@ start_it_up()
 
   # Mount config filesystem for overlays
   mount -t configfs none /config
+  
+  # Create overlay for fclk[0-4]
+  mkdir /config/device-tree/overlays/fclk
+  cp /home/median.demonstrator.internal/dt-overlay/fclk/fclk.dtbo /config/device-tree/overlays/fclk/dtbo
+  
+  #Probe the driver
+  modprobe fclk
 }
 
 shut_it_down()
 {
+  # Delete overlay fclk.dtbo
+  rmdir /config/device-tree/overlays/fclk
+  
+  # Unmount config filesystem
   umount /config
 }
 
@@ -34,7 +45,7 @@ case "$1" in
     start_it_up
   ;;
   stop)
-#    shut_it_down
+    shut_it_down
   ;;
   reload|force-reload)
 #    reload_it
