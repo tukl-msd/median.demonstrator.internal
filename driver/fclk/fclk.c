@@ -50,7 +50,7 @@ static int fclk_probe(struct platform_device *pdev)
 	pState->pClk = devm_clk_get(&pdev->dev, NULL);
 	if(IS_ERR(pState->pClk))
 	{
-		dev_err(&pdev->dev, "fclk: failed to get clock");
+		dev_err(&pdev->dev, "Failed to get clock");
 		return PTR_ERR(pState->pClk);
 	}
 	
@@ -60,32 +60,32 @@ static int fclk_probe(struct platform_device *pdev)
 	ret = clk_set_rate(pState->pClk, pState->nFreq);
 	if(ret != 0)
 	{
-		dev_err(&pdev->dev, "fclk: Frequency set to %d failed", pState->nFreq);
+		dev_err(&pdev->dev, "Frequency set to %d failed", pState->nFreq);
 		return ret;
 	}
 	
-	dev_info(&pdev->dev, "fclk: Frequency set to %d", pState->nFreq);
+	dev_info(&pdev->dev, "Frequency set to %d", pState->nFreq);
 	
 	// Enable clock
 	//ret = clk_prepare_enable(pState->pClk);
 	if(ret != 0)
 	{
-		dev_err(&pdev->dev, "fclk: Failed to enalbe Clock");
+		dev_err(&pdev->dev, "Failed to enalbe Clock");
 		return ret;
 	}
 	
-	dev_info(&pdev->dev, "fclk: Probe successful for (%s)\n", pdev->name);
+	dev_info(&pdev->dev, "Probe successful for (%s)\n", pdev->name);
 	
 	return 0;
 }
 
 static int fclk_remove(struct platform_device *pdev)
 {
-	struct fclk_state *pState = platform_get_drvdata(pdev);
+	//struct fclk_state *pState = platform_get_drvdata(pdev);
 
 	//clk_disable_unprepare(pState->pClk);
 	
-	dev_info(&pdev->dev, "fclk: Removal successful\n");
+	dev_info(&pdev->dev, "Removal successful\n");
 	return 0;
 }
 
