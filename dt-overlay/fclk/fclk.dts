@@ -4,29 +4,28 @@
 / {
 	compatible = "xlnx,zynq-7000";
 	
-	fragment@0 {
+	fragment {
 		target-path = "/";
-		__overlay__ {
-		
-			fclk_0: fclk@0 {
+		__overlay__ {			
+			fclk_0: fclk0 {
 				compatible = "jf,fclk-1.0.0";
 				
 				clocks = <&clkc 15>;
 				freq-in-hz = <160000000>;
 			};
-			fclk_1: fclk@1 {
+			fclk_1: fclk1 {
 				compatible = "jf,fclk-1.0.0";
 				
 				clocks = <&clkc 16>;
 				freq-in-hz = <100000000>;
 			};
-			fclk_2: fclk@2 {
+			fclk_2: fclk2 {
 				compatible = "jf,fclk-1.0.0";
 				
 				clocks = <&clkc 17>;
 				freq-in-hz = <200000000>;
 			};
-			fclk_3: fclk@3 {
+			fclk_3: fclk3 {
 				compatible = "jf,fclk-1.0.0";
 				
 				clocks = <&clkc 18>;
