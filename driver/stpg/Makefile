@@ -1,4 +1,4 @@
-obj-m += xilinx-vtc.o
+obj-m += stpg.o
  
 all:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules

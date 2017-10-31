@@ -1,0 +1,60 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "xlnx,zynq-7000";
+	
+	fragment {
+		target-path = "/amba";
+		
+		__overlay__ {
+			#address-cells = <1>;
+			#size-cells = <1>;
+			
+			axi_vdma_0: dma@83000000 {
+				#dma-cells = <1>;
+				compatible = "xlnx,axi-vdma-1.00.a";
+				clock-names = "s_axi_lite_aclk", "m_axi_mm2s_aclk", "m_axi_mm2s_aclk";
+				clocks = <&clkc 15>, <&clkc 15>, <&clkc 15>;
+				interrupt-parent = <&intc>;
+				interrupts = <0 29 4>;
+				reg = <0x83000000 0x10000>;
+				xlnx,addrwidth = <0x20>;
+				xlnx,flush-fsync = <0x1>;
+				xlnx,num-fstores = <0x3>;
+				
+				dma-channel@83000000 {
+					compatible = "xlnx,axi-vdma-mm2s-channel";
+					interrupts = <0 29 4>;
+					xlnx,datawidth = <0x20>;
+					xlnx,device-id = <0x0>;
+					xlnx,genlock-mode ;
+					xlnx,include-dre ;
+				};				
+			};
+			
+			clk_wiz_0: clk_wiz@83c00000 {
+				clock-output-names = "clk_out1", "clk_out2", "clk_unused0", "clk_unused1", "clk_unused2", "clk_unused3", "clk_unused4";
+				compatible = "xlnx,clocking-wizard";
+				reg = <0x83c00000 0x10000>;
+				clock-names = "clk_in1", "s_axi_aclk";
+				clocks = <&clkc 17>, <&clkc 15>;
+				speed-grade = <1>;
+			};
+			
+			vtc_0: v_tc@83c10000 {
+				compatible = "xlnx,v-tc-6.1";
+				reg = <0x83c10000 0x10000>;
+				
+				clocks = <&clkc 15>;
+				xlnx,generator;
+			};
+			
+			stpg_0: stpg@83c20000 {
+				compatible = "jf,stpg-1.0.0";
+				reg = <0x83c20000 0x10000>;
+				clocks = <&clkc 15>;
+			};
+		};
+	};
+};

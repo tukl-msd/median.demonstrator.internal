@@ -1,0 +1,20 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "xlnx,zynq-7000";
+	
+	fragment_1 {
+		target-path = "/";
+		
+		__overlay__ {
+			video_output_0: video_output {
+				compatible = "jf,video-output-1.0.0";
+				
+				jf,stpg = <&stpg_0>;
+				xlnx,vtc = <&vtc_0>;
+			};
+		};
+	};
+
+};
