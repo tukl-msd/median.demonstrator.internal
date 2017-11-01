@@ -6,6 +6,12 @@
 #include "../stpg/stpg.h"
 #include <linux/dma/xilinx_dma.h>
 
+// File access
+#include <linux/fs.h>
+#include <asm/segment.h>
+#include <asm/uaccess.h>
+#include <linux/buffer_head.h>
+
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Johannes Feldmann");
 MODULE_DESCRIPTION("This module manages the video output to hdmi");
@@ -25,21 +31,163 @@ video_output_0: video_output {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Driver structures
-struct video_output_state {
-	struct device*		pDev;
-	struct xvtc_device* pVtc;
-	struct stpg_device* pStpg;
-	struct dma_chan*	pVDMA;
-	u32*				pBuffer;
-	dma_addr_t 			dma_addr;	
-	dma_cookie_t 		tx_cookie;
+
+typedef enum ePicState
+{
+	PIC_CONFIG,
+	PIC_DATA
 };
 
-// Test
-static void Test(void *arg)
+struct picture_pos {
+	unsigned x;
+	unsigned y;
+	unsigned col;
+};
+
+struct picture_state {
+	enum ePicState state;
+	int nWidth;
+	int nHeight;
+	int nBmpWidth;
+	int nBmpHeight;
+	struct picture_pos CurPos;
+};
+
+struct video_output_state {
+	struct device*			pDev;
+	struct xvtc_device* 	pVtc;
+	struct stpg_device* 	pStpg;
+	struct dma_chan*		pVDMA;
+	u32*					pBuffer;
+	dma_addr_t 				dma_addr;	
+	dma_cookie_t 			tx_cookie;
+	struct picture_state	pic;
+};
+
+struct __attribute__((__packed__)) bmp_header {
+    u16 bfType;
+    u32 bfSize;
+    u32 _reserved;
+	u32 bfOffBits;
+	u32 biSize;
+	u32 biWidth;
+	u32 biHeight;
+	u16 biPlanes;
+	u16 biBitCount;
+	u32 biCompression;
+};
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// Driver attributes
+
+ssize_t picture_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
-	pr_debug("Got tx callback\n");
-}
+	struct video_output_state* pState = platform_get_drvdata(to_platform_device(dev));
+	struct bmp_header* pHeader = (struct bmp_header*) buf; 
+	int i;
+	unsigned buffer_size = pState->pic.nWidth*pState->pic.nHeight*sizeof(u32);
+	u8* out = (u8*)pState->pBuffer;
+	
+	//printk(KERN_INFO "Count = %u\n", count);
+	
+	if(pState->pic.state == PIC_CONFIG)
+	{
+		// Bitmap header is 54 Bytes, so that should be at least the size of the incoming data.
+		if(count < 54)
+		{
+			dev_err(dev, "Size too small\n");
+			return count;
+		}
+		
+		// Test the type
+		if(pHeader->bfType != 0x4D42) // 0x424D = "BM" <- BMP Identifier
+		{
+			dev_err(dev, "No BMP file\n");
+			return count;
+		}
+		
+		// Save Width, Height
+		pState->pic.nBmpWidth = pHeader->biWidth;
+		pState->pic.nBmpHeight = pHeader->biHeight;
+		
+		dev_info(dev, "Width: %d Height: %d\n", pState->pic.nBmpWidth, pState->pic.nBmpHeight);
+		
+		// Save number of bits per pixel
+		if(pHeader->biBitCount != 24)
+		{
+			dev_err(dev, "Number of Bits is not 24\n");
+			return count;			
+		}
+		
+		// Test if this picture is compressed -> not supported
+		if(pHeader->biCompression != 0)
+		{
+			dev_err(dev, "BMP is compressed - not supported\n");
+			return count;
+		}
+		
+		pState->pic.state = PIC_DATA;
+		pState->pic.CurPos.x = 0;
+		pState->pic.CurPos.y = 0;
+		pState->pic.CurPos.col = 0;
+
+		dev_info(dev, "Goto %u\n", pHeader->bfOffBits);
+		
+		// Clear output
+		memset(pState->pBuffer, 0, buffer_size);
+		
+		// Type OK, use the offset to jump to data:
+		return pHeader->bfOffBits;
+	}
+	else
+	{			
+		// Get Data
+		i = 0;
+		while(i < count)
+		{
+			out[(pState->pic.nBmpHeight - pState->pic.CurPos.y - 1) * pState->pic.nWidth * sizeof(u32) + \
+				(pState->pic.CurPos.x * sizeof(u32)) + (2 - pState->pic.CurPos.col)] = buf[i];
+			
+			pState->pic.CurPos.col++;
+			if(pState->pic.CurPos.col > 2)
+			{
+				pState->pic.CurPos.col = 0;
+				pState->pic.CurPos.x++;				
+				if(pState->pic.CurPos.x == pState->pic.nBmpWidth)
+				{
+					pState->pic.CurPos.x = 0;
+					pState->pic.CurPos.y++;
+					if(pState->pic.CurPos.y == pState->pic.nBmpHeight)
+					{
+						// We are done
+						dev_info(dev, "BMP picture loaded\n");
+						pState->pic.state = PIC_CONFIG;
+						return count;
+					}
+				}
+			}
+			
+			i++;
+		}
+		
+		dev_info(dev, "BMP loading data (%u)\n", count);
+		
+		return count;
+	}
+};
+
+static DEVICE_ATTR_WO(picture);
+
+
+static struct attribute *dev_attrs[] = {
+	&dev_attr_picture.attr,
+	NULL,
+};
+
+static struct attribute_group dev_group = {
+//    .name = "",
+    .attrs = dev_attrs,
+};
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Function definitions
@@ -194,9 +342,6 @@ static int video_output_probe(struct platform_device *pdev)
 	}
 	dev_warn(&pdev->dev, "Device preperation txd: %08X", (unsigned)txd);
 	
-	txd->callback = Test;
-	txd->callback_param = 0;
-
 	pState->tx_cookie = txd->tx_submit(txd);
 	if(dma_submit_error(pState->tx_cookie))
 	{
@@ -238,8 +383,17 @@ static int video_output_probe(struct platform_device *pdev)
 	dma_async_issue_pending(pState->pVDMA);
 	
 	// Set driver data
+	pState->pic.state = PIC_CONFIG;
+	pState->pic.nWidth = 1280;
+	pState->pic.nHeight = 720;
 	platform_set_drvdata(pdev, pState);	
 
+	ret = sysfs_create_group(&pdev->dev.kobj, &dev_group);
+    if (ret) {
+        dev_err(&pdev->dev, "sysfs creation failed\n");
+        return ret;
+    }
+	
 	dev_warn(&pdev->dev, "Probe successful\n");
 	
 	return 0;
@@ -250,6 +404,8 @@ static int video_output_remove(struct platform_device *pdev)
 	struct video_output_state* pState = platform_get_drvdata(pdev);
 	
 	CleanUp(pState);
+	
+	sysfs_remove_group(&pdev->dev.kobj, &dev_group);
 	
 	dev_info(&pdev->dev, "Removal successful\n");
 	return 0;
