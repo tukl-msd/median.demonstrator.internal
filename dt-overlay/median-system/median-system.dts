@@ -72,6 +72,12 @@
 				clocks = <&clkc 15>;
 				xlnx,generator;
 			};
+			
+			stpg_0: stpg@43C00000 {
+				compatible = "jf,stpg-1.0.0";
+				reg = <0x43C00000 0x10000>;
+				clocks = <&clkc 15>;
+			};
 		};
 	};
 };

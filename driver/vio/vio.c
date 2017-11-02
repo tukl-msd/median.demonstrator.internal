@@ -56,10 +56,12 @@ struct vio_state {
 	struct device*			pDev;
 	struct xvtc_device* 	pVtc;
 	struct stpg_device* 	pStpg;
-	struct dma_chan*		pVDMA;
+	struct dma_chan*		pVMDA_out;
+	struct dma_chan*		pVMDA_in;
 	u32*					pBuffer;
 	dma_addr_t 				dma_addr;	
 	dma_cookie_t 			tx_cookie;
+	dma_cookie_t 			rx_cookie;
 	struct picture_state	pic;
 };
 
@@ -195,8 +197,6 @@ static struct attribute_group dev_group = {
 void CleanUp(struct vio_state* pState)
 {
 	enum dma_status status;
-	
-	// Stop VDMA
 	const struct xilinx_vdma_config vdma_cfg = {
 		.frm_dly = 0,				// @frm_dly: Frame delay
 		.gen_lock = 0,				// @gen_lock: Whether in gen-lock mode
@@ -209,18 +209,27 @@ void CleanUp(struct vio_state* pState)
 		.reset = 1,					// @reset: Reset Channel
 		.ext_fsync = 0,				// @ext_fsync: External Frame Sync source
 	};
-	xilinx_vdma_channel_set_config(pState->pVDMA, &vdma_cfg);
-	
-	// Unmap VDMA
-	if(pState->pVDMA && pState->pBuffer)
+		
+	// Release Buffer
+	if(pState->pBuffer)
 	{
-		dma_free_coherent(pState->pVDMA->device->dev, pState->pBuffer, 1280*720*sizeof(u32), DMA_MEM_TO_DEV);
+		dma_free_coherent(pState->pDev, 1280*720*sizeof(u32),  pState->pBuffer, pState->dma_addr);
 	}
 	
-	// Release vdma channel
-	if(pState->pVDMA)
+	// Release vdma channels
+	if(pState->pVMDA_out)
 	{
-		dma_release_channel(pState->pVDMA);
+		// Stop VDMA
+		xilinx_vdma_channel_set_config(pState->pVMDA_out, &vdma_cfg);
+		
+		dma_release_channel(pState->pVMDA_out);
+	}
+	if(pState->pVMDA_in)
+	{
+		// Stop VDMA
+		xilinx_vdma_channel_set_config(pState->pVMDA_in, &vdma_cfg);
+		
+		dma_release_channel(pState->pVMDA_in);
 	}
 }
 
@@ -230,7 +239,7 @@ static int vio_probe(struct platform_device *pdev)
 {
 	struct vio_state* pState;
 	struct dma_interleaved_template dma_it;
-	struct dma_async_tx_descriptor *txd = NULL;
+	struct dma_async_tx_descriptor *txd = NULL, *rxd = NULL;
 	int x,y, ret;
 
 	dev_warn(&pdev->dev, "Probe started\n");
@@ -266,7 +275,7 @@ static int vio_probe(struct platform_device *pdev)
 	pState->pDev = &pdev->dev;
 
 	// Get Simple Test Pattern Generator
-	/*pState->pStpg = stpg_get(pdev->dev.of_node);
+	pState->pStpg = stpg_get(pdev->dev.of_node);
 	if(pState->pStpg == NULL || pState->pStpg == ERR_PTR(-EINVAL) || pState->pStpg == ERR_PTR(-EPROBE_DEFER))
 	{
 		CleanUp(pState);
@@ -279,19 +288,26 @@ static int vio_probe(struct platform_device *pdev)
 	
 	// Start Generator
 	stpg_start(pState->pStpg);
-	*/
-	// Get VDMA channel
-	pState->pVDMA = dma_request_slave_channel(&pdev->dev, "vdma_out");
-	if(!pState->pVDMA)
+	
+	// Get VDMA channels
+	pState->pVMDA_out = dma_request_slave_channel(&pdev->dev, "vdma_out");
+	if(!pState->pVMDA_out)
 	{
 		CleanUp(pState);
 		dev_err(&pdev->dev, "No Tx VDMA channel\n");
-		return PTR_ERR(pState->pVDMA);
+		return -ENODEV ;
 	}
-	dev_warn(&pdev->dev, "Slave channel :%08X\n", pState->pVDMA);
+	
+	pState->pVMDA_in = dma_request_slave_channel(&pdev->dev, "vdma_in");
+	if(!pState->pVMDA_in)
+	{
+		CleanUp(pState);
+		dev_err(&pdev->dev, "No Rx VDMA channel\n");
+		return -ENODEV ;
+	}
 	
 	// Configure VDMA
-	const struct xilinx_vdma_config vdma_cfg = {
+	struct xilinx_vdma_config vdma_cfg = {
 		.frm_dly = 0,				// @frm_dly: Frame delay
 		.gen_lock = 0,				// @gen_lock: Whether in gen-lock mode
 		.master = 0,				// @master: Master that it syncs to
@@ -303,7 +319,12 @@ static int vio_probe(struct platform_device *pdev)
 		.reset = 0,					// @reset: Reset Channel
 		.ext_fsync = 0,				// @ext_fsync: External Frame Sync source
 	};
-	xilinx_vdma_channel_set_config(pState->pVDMA, &vdma_cfg);
+	xilinx_vdma_channel_set_config(pState->pVMDA_out, &vdma_cfg);
+	
+	vdma_cfg.gen_lock = 0;
+	vdma_cfg.master = 0;
+	vdma_cfg.park = 1;
+	xilinx_vdma_channel_set_config(pState->pVMDA_in, &vdma_cfg);
 	
 	dma_it.src_start = pState->dma_addr;		// @src_start: Bus address of source for the first chunk.
 	dma_it.dir = DMA_MEM_TO_DEV;				// @dir: Specifies the type of Source and Destination.
@@ -317,20 +338,37 @@ static int vio_probe(struct platform_device *pdev)
 												// chunk and before first src/dst address for next chunk.
 	dma_it.frame_size = 1;						// @frame_size: Number of chunks in a frame i.e, size of sgl[].
 		
-	txd = pState->pVDMA->device->device_prep_interleaved_dma(pState->pVDMA, &dma_it, DMA_CTRL_ACK);
+	txd = pState->pVMDA_out->device->device_prep_interleaved_dma(pState->pVMDA_out, &dma_it, DMA_CTRL_ACK);
 	if(!txd)
 	{
 		CleanUp(pState);
-		dev_err(&pdev->dev, "Async transaction descriptor invalid\n");
+		dev_err(&pdev->dev, "Async transaction descriptor TX invalid\n");
 		return -1;
 	}
-	dev_warn(&pdev->dev, "Device preperation txd: %08X", (unsigned)txd);
+	
+	dma_it.dst_start = pState->dma_addr;
+	dma_it.dir = DMA_DEV_TO_MEM;
+	rxd = pState->pVMDA_in->device->device_prep_interleaved_dma(pState->pVMDA_in, &dma_it, DMA_CTRL_ACK);
+	if(!rxd)
+	{
+		CleanUp(pState);
+		dev_err(&pdev->dev, "Async transaction descriptor RX invalid\n");
+		return -1;
+	}
 	
 	pState->tx_cookie = txd->tx_submit(txd);
 	if(dma_submit_error(pState->tx_cookie))
 	{
 		CleanUp(pState);
-		dev_err(&pdev->dev, "DMA submit error\n");
+		dev_err(&pdev->dev, "DMA TX submit error\n");
+		return -1;
+	}
+	
+	pState->rx_cookie = rxd->tx_submit(rxd);
+	if(dma_submit_error(pState->rx_cookie))
+	{
+		CleanUp(pState);
+		dev_err(&pdev->dev, "DMA RX submit error\n");
 		return -1;
 	}
 	
@@ -363,7 +401,9 @@ static int vio_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "Failed to enable vtc generator");
 		return ret;
 	}
-	dma_async_issue_pending(pState->pVDMA);
+	
+	dma_async_issue_pending(pState->pVMDA_in);
+	dma_async_issue_pending(pState->pVMDA_out);
 	
 	// Set driver data
 	pState->pic.state = PIC_CONFIG;
