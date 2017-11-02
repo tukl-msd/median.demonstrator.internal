@@ -19,7 +19,7 @@ MODULE_DESCRIPTION("This module manages the video output to hdmi");
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Devicetree structures
 /*
-video_output_0: video_output {
+vio_0: vio {
 	compatible = "jf,video-output-1.0.0";
 	
 	xlnx,vtc = <&vtc_0>;
@@ -52,7 +52,7 @@ struct picture_state {
 	struct picture_pos CurPos;
 };
 
-struct video_output_state {
+struct vio_state {
 	struct device*			pDev;
 	struct xvtc_device* 	pVtc;
 	struct stpg_device* 	pStpg;
@@ -81,7 +81,7 @@ struct __attribute__((__packed__)) bmp_header {
 
 ssize_t picture_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
-	struct video_output_state* pState = platform_get_drvdata(to_platform_device(dev));
+	struct vio_state* pState = platform_get_drvdata(to_platform_device(dev));
 	struct bmp_header* pHeader = (struct bmp_header*) buf; 
 	int i;
 	unsigned buffer_size = pState->pic.nWidth*pState->pic.nHeight*sizeof(u32);
@@ -192,7 +192,7 @@ static struct attribute_group dev_group = {
 // Function definitions
 
 // Save Clean Up function
-void CleanUp(struct video_output_state* pState)
+void CleanUp(struct vio_state* pState)
 {
 	enum dma_status status;
 	
@@ -226,9 +226,9 @@ void CleanUp(struct video_output_state* pState)
 
 //-------------------------------------------------------------------------------------------------
 // Probe 
-static int video_output_probe(struct platform_device *pdev)
+static int vio_probe(struct platform_device *pdev)
 {
-	struct video_output_state* pState;
+	struct vio_state* pState;
 	struct dma_interleaved_template dma_it;
 	struct dma_async_tx_descriptor *txd = NULL;
 	int x,y, ret;
@@ -382,9 +382,9 @@ static int video_output_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int video_output_remove(struct platform_device *pdev)
+static int vio_remove(struct platform_device *pdev)
 {
-	struct video_output_state* pState = platform_get_drvdata(pdev);
+	struct vio_state* pState = platform_get_drvdata(pdev);
 	
 	CleanUp(pState);
 	
@@ -396,19 +396,19 @@ static int video_output_remove(struct platform_device *pdev)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Driver definition
-static const struct of_device_id video_output_of_ids[] = {
-	{ .compatible = "jf,video-output-1.0.0",},
+static const struct of_device_id vio_of_ids[] = {
+	{ .compatible = "jf,vio-1.0.0",},
 	{}
 };
 
-static struct platform_driver video_output_driver = {
+static struct platform_driver vio_driver = {
 	.driver = {
-		.name = "video-output",
+		.name = "vio",
 		.owner = THIS_MODULE,
-		.of_match_table = video_output_of_ids,
+		.of_match_table = vio_of_ids,
 	},
-	.probe = video_output_probe,
-	.remove = video_output_remove,
+	.probe = vio_probe,
+	.remove = vio_remove,
 };
 
-module_platform_driver(video_output_driver);
+module_platform_driver(vio_driver);

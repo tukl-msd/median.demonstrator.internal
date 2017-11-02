@@ -8,8 +8,8 @@
 		target-path = "/";
 		
 		__overlay__ {
-			video_output_0: video_output {
-				compatible = "jf,video-output-1.0.0";
+			vio_0: vio {
+				compatible = "jf,vio-1.0.0";
 				
 				xlnx,vtc = <&vtc_0>;
 				dmas = <&axi_vdma_out 0 &axi_vdma_out 0>;
