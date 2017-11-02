@@ -11,7 +11,7 @@
 			#address-cells = <1>;
 			#size-cells = <1>;
 			
-			axi_vdma_0: dma@83000000 {
+			axi_vdma_out: dma@83000000 {
 				#dma-cells = <1>;
 				compatible = "xlnx,axi-vdma-1.00.a";
 				clock-names = "s_axi_lite_aclk", "m_axi_mm2s_aclk", "m_axi_mm2s_aclk";
@@ -33,7 +33,29 @@
 					xlnx,fstore-enable ;
 				};				
 			};
-			
+
+			axi_vdma_in: dma@43000000 {
+				#dma-cells = <1>;
+				compatible = "xlnx,axi-vdma-1.00.a";
+				clock-names = "s_axi_lite_aclk", "m_axi_s2mm_aclk", "s_axis_s2mm_aclk";
+				clocks = <&clkc 15>, <&clkc 15>, <&clkc 15>;
+				reg = < 0x43000000 0x10000 >;
+				interrupt-parent = <&intc>;
+				interrupts = <0 30 4>;
+				xlnx,addrwidth = <0x20>;
+				xlnx,flush-fsync = <0x1>;
+				xlnx,num-fstores = <0x1>;
+				
+				dma-channel@43000030 {
+					compatible = "xlnx,axi-vdma-s2mm-channel";
+					interrupts = < 0 30 4 >;
+					xlnx,datawidth = <0x20>;
+					xlnx,device-id = <0x0>;
+					xlnx,genlock-mode ;
+					xlnx,include-dre ;
+					xlnx,fstore-enable ;
+				} ;
+			} ;			
 			clk_wiz_0: clk_wiz@83c00000 {
 				clock-output-names = "clk_out1", "clk_out2", "clk_unused0", "clk_unused1", "clk_unused2", "clk_unused3", "clk_unused4";
 				compatible = "xlnx,clocking-wizard";
@@ -49,12 +71,6 @@
 				
 				clocks = <&clkc 15>;
 				xlnx,generator;
-			};
-			
-			stpg_0: stpg@83c20000 {
-				compatible = "jf,stpg-1.0.0";
-				reg = <0x83c20000 0x10000>;
-				clocks = <&clkc 15>;
 			};
 		};
 	};

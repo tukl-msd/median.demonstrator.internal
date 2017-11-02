@@ -11,10 +11,9 @@
 			video_output_0: video_output {
 				compatible = "jf,video-output-1.0.0";
 				
-				jf,stpg = <&stpg_0>;
 				xlnx,vtc = <&vtc_0>;
-				dmas = <&axi_vdma_0 0>;
-				dma-names = "vdma0";
+				dmas = <&axi_vdma_out 0 &axi_vdma_out 0>;
+				dma-names = "vdma_out", "vdma_in";
 			};
 		};
 	};

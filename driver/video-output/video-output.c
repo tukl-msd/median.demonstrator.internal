@@ -22,10 +22,9 @@ MODULE_DESCRIPTION("This module manages the video output to hdmi");
 video_output_0: video_output {
 	compatible = "jf,video-output-1.0.0";
 	
-	jf,stpg = <&stpg_0>;
 	xlnx,vtc = <&vtc_0>;
-	dmas = <&axi_vdma_0 0>;
-	dma-names = "vdma0";
+	dmas = <&axi_vdma_out 0 &axi_vdma_in 0>;
+	dma-names = "vdma_out", "vdma_in";
 };
 */
 
@@ -223,12 +222,6 @@ void CleanUp(struct video_output_state* pState)
 	{
 		dma_release_channel(pState->pVDMA);
 	}
-	
-	// Free memory
-	if(pState->pBuffer)
-	{	
-		kfree(pState->pBuffer);
-	}	
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -248,7 +241,7 @@ static int video_output_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	
 	// Allocate memory for picture
-	pState->pBuffer = kcalloc(1280*720, sizeof(u32), GFP_KERNEL);
+	pState->pBuffer = dma_zalloc_coherent(&pdev->dev, 1280*720*sizeof(u32), &pState->dma_addr, GFP_KERNEL);
 	if(!pState->pBuffer)
 	{
 		CleanUp(pState);
@@ -273,7 +266,7 @@ static int video_output_probe(struct platform_device *pdev)
 	pState->pDev = &pdev->dev;
 
 	// Get Simple Test Pattern Generator
-	pState->pStpg = stpg_get(pdev->dev.of_node);
+	/*pState->pStpg = stpg_get(pdev->dev.of_node);
 	if(pState->pStpg == NULL || pState->pStpg == ERR_PTR(-EINVAL) || pState->pStpg == ERR_PTR(-EPROBE_DEFER))
 	{
 		CleanUp(pState);
@@ -286,9 +279,9 @@ static int video_output_probe(struct platform_device *pdev)
 	
 	// Start Generator
 	stpg_start(pState->pStpg);
-	
+	*/
 	// Get VDMA channel
-	pState->pVDMA = dma_request_slave_channel(&pdev->dev, "vdma0");
+	pState->pVDMA = dma_request_slave_channel(&pdev->dev, "vdma_out");
 	if(!pState->pVDMA)
 	{
 		CleanUp(pState);
@@ -311,15 +304,6 @@ static int video_output_probe(struct platform_device *pdev)
 		.ext_fsync = 0,				// @ext_fsync: External Frame Sync source
 	};
 	xilinx_vdma_channel_set_config(pState->pVDMA, &vdma_cfg);
-	
-	pState->dma_addr = dma_map_single(pState->pVDMA->device->dev, pState->pBuffer, 1280*720*sizeof(u32), DMA_MEM_TO_DEV);
-	if(dma_mapping_error(pState->pVDMA->device->dev, pState->dma_addr))
-	{
-		CleanUp(pState);
-		dev_err(&pdev->dev, "Mapping failed\n");
-		return PTR_ERR(pState->dma_addr);
-	}
-	dev_warn(&pdev->dev, "Mapping done %08X to %08X", (unsigned)pState->pBuffer, (unsigned)pState->dma_addr);
 	
 	dma_it.src_start = pState->dma_addr;		// @src_start: Bus address of source for the first chunk.
 	dma_it.dir = DMA_MEM_TO_DEV;				// @dir: Specifies the type of Source and Destination.
@@ -349,7 +333,6 @@ static int video_output_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "DMA submit error\n");
 		return -1;
 	}
-	
 	
 	// Get vtc device
 	pState->pVtc = xvtc_of_get(pdev->dev.of_node);
