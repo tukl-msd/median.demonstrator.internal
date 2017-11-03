@@ -80,4 +80,31 @@
 			};
 		};
 	};
+	
+	fragment1 {
+		target = <&i2c1>;
+		__overlay__ {
+			status = "okay";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			
+			i2cmux0: i2cmux@70  {
+				compatible = "nxp,pca9544";
+				#address-cells = <1>;
+				#size-cells = <0>;
+				reg = <0x70>;
+
+				i2c1@3 {    // Camera Interface Connector
+					#address-cells = <1>;
+					#size-cells = <0>;
+					reg = <3>;
+					
+					i2c_pi_cam: cam@10 {
+						compatible = "jf,pi-cam-1.0.0";
+						reg = <0x10>;
+					};
+				};
+			};
+		};
+	};
 };
