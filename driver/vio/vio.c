@@ -3,8 +3,10 @@
 #include <linux/platform_device.h>
 #include <linux/of_platform.h>
 #include "../xilinx-vtc/xilinx-vtc.h"
-#include "../stpg/stpg.h"
 #include <linux/dma/xilinx_dma.h>
+
+#include "../stpg/stpg.h"
+#include "../pi-cam/pi-cam.h"
 
 // File access
 #include <linux/fs.h>
@@ -31,7 +33,7 @@ vio_0: vio {
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Driver structures
 
-typedef enum ePicState
+enum ePicState
 {
 	PIC_CONFIG,
 	PIC_DATA
@@ -52,6 +54,12 @@ struct picture_state {
 	struct picture_pos CurPos;
 };
 
+struct cam_state {
+	struct i2c_client*		pCam;
+	struct dma_async_tx_descriptor* pDesc;
+	bool					bEnabled;
+};
+
 struct vio_state {
 	struct device*			pDev;
 	struct xvtc_device* 	pVtc;
@@ -60,9 +68,12 @@ struct vio_state {
 	struct dma_chan*		pVMDA_in;
 	u32*					pBuffer;
 	dma_addr_t 				dma_addr;	
+	struct dma_async_tx_descriptor* txd;
+	struct dma_async_tx_descriptor* rxd;
 	dma_cookie_t 			tx_cookie;
 	dma_cookie_t 			rx_cookie;
 	struct picture_state	pic;
+	struct cam_state		cam;
 };
 
 struct __attribute__((__packed__)) bmp_header {
@@ -79,6 +90,140 @@ struct __attribute__((__packed__)) bmp_header {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
+// Driver helper functions
+
+static void WriteBuffer(struct vio_state* pState)
+{
+	int x,y;
+	// Insert fancy colors
+	for(y = 0; y < 720; y++)
+	{
+		for(x = 0; x < 1280; x++)
+		{
+			u8 r, g, b;
+			r = x/5;
+			g = 255 - x/5;
+			b = y/3;
+			pState->pBuffer[x+y*1280] = (r << 0) + (g << 8) + (b << 16);
+		}
+	}
+}
+
+static void SetTxVDMAConfig(struct vio_state* pState)
+{
+	// Configure VDMA
+	struct xilinx_vdma_config vdma_cfg = {
+		.frm_dly = 0,				// @frm_dly: Frame delay
+		.gen_lock = 0,				// @gen_lock: Whether in gen-lock mode
+		.master = 0,				// @master: Master that it syncs to
+		.frm_cnt_en = 0,			// @frm_cnt_en: Enable frame count enable
+		.park = 1,					// @park: Whether wants to park
+		.park_frm = 0,				// @park_frm: Frame to park on
+		.coalesc = 0,				// @coalesc: Interrupt coalescing threshold
+		.delay = 0,					// @delay: Delay counter
+		.reset = 0,					// @reset: Reset Channel
+		.ext_fsync = 0,				// @ext_fsync: External Frame Sync source
+	};
+	xilinx_vdma_channel_set_config(pState->pVMDA_out, &vdma_cfg);	
+}
+
+static void SetRxVDMAConfig(struct vio_state* pState)
+{
+	// Configure VDMA
+	struct xilinx_vdma_config vdma_cfg = {
+		.frm_dly = 0,				// @frm_dly: Frame delay
+		.gen_lock = 0,				// @gen_lock: Whether in gen-lock mode
+		.master = 0,				// @master: Master that it syncs to
+		.frm_cnt_en = 0,			// @frm_cnt_en: Enable frame count enable
+		.park = 1,					// @park: Whether wants to park
+		.park_frm = 0,				// @park_frm: Frame to park on
+		.coalesc = 0,				// @coalesc: Interrupt coalescing threshold
+		.delay = 0,					// @delay: Delay counter
+		.reset = 0,					// @reset: Reset Channel
+		.ext_fsync = 0,				// @ext_fsync: External Frame Sync source
+	};
+	xilinx_vdma_channel_set_config(pState->pVMDA_in, &vdma_cfg);
+}
+
+static bool SetTxVDMASetup(struct vio_state* pState)
+{
+	struct dma_async_tx_descriptor* txd = NULL;
+	static struct dma_interleaved_template dma_it;
+	
+	dma_it.src_start = pState->dma_addr;		// @src_start: Bus address of source for the first chunk.
+	dma_it.dir = DMA_MEM_TO_DEV;				// @dir: Specifies the type of Source and Destination.
+	dma_it.src_inc = false;						// @src_inc: If the source address increments after reading from it.
+	dma_it.src_sgl = false;						// @src_sgl: If the 'icg' of sgl[] applies to Source (scattered read).
+												// Otherwise, source is read contiguously (icg ignored).
+												// Ignored if src_inc is false.
+	dma_it.numf = 720;							// @numf: Number of frames in this template.
+	dma_it.sgl[0].size = 1280 * sizeof(u32);	// @size: Number of bytes to read from source.
+	dma_it.sgl[0].icg = 0;						// @icg: Number of bytes to jump after last src/dst address of this 
+												// chunk and before first src/dst address for next chunk.
+	dma_it.frame_size = 1;						// @frame_size: Number of chunks in a frame i.e, size of sgl[].
+		
+	txd = pState->pVMDA_out->device->device_prep_interleaved_dma(pState->pVMDA_out, &dma_it, DMA_CTRL_ACK);
+	if(!txd)
+	{
+		dev_err(pState->pDev, "Async transaction descriptor TX invalid\n");
+		return false;
+	}
+
+	pState->tx_cookie = txd->tx_submit(txd);
+	if(dma_submit_error(pState->tx_cookie))
+	{
+		dev_err(pState->pDev, "DMA TX submit error\n");
+		return false;
+	}
+	
+	return true;
+}
+
+static bool SetRxVDMASetup(struct vio_state* pState)
+{
+	struct dma_async_tx_descriptor* rxd = NULL;
+	static struct dma_interleaved_template dma_it;
+
+	dma_it.dst_start = pState->dma_addr;		// @dst_start: Bus address of source for the first chunk.
+	dma_it.dir = DMA_DEV_TO_MEM;				// @dir: Specifies the type of Source and Destination.
+	dma_it.src_inc = false;						// @src_inc: If the source address increments after reading from it.
+	dma_it.src_sgl = false;						// @src_sgl: If the 'icg' of sgl[] applies to Source (scattered read).
+												// Otherwise, source is read contiguously (icg ignored).
+												// Ignored if src_inc is false.
+	dma_it.numf = 720;							// @numf: Number of frames in this template.
+	dma_it.sgl[0].size = 1280 * sizeof(u32);	// @size: Number of bytes to read from source.
+	dma_it.sgl[0].icg = 0;						// @icg: Number of bytes to jump after last src/dst address of this 
+												// chunk and before first src/dst address for next chunk.
+	dma_it.frame_size = 1;						// @frame_size: Number of chunks in a frame i.e, size of sgl[].
+	
+	rxd = pState->pVMDA_in->device->device_prep_interleaved_dma(pState->pVMDA_in, &dma_it, DMA_CTRL_ACK);
+	if(!rxd)
+	{
+		dev_err(pState->pDev, "Async transaction descriptor RX invalid\n");
+		return false;
+	}
+
+	pState->rx_cookie = rxd->tx_submit(rxd);
+	if(dma_submit_error(pState->rx_cookie))
+	{
+		dev_err(pState->pDev, "DMA RX submit error\n");
+		return false;
+	}
+	
+	return true;
+}
+
+static void StartVDMA(struct dma_chan* chan)
+{
+	dma_async_issue_pending(chan);
+}
+
+static void StopVDMA(struct dma_chan* chan)
+{
+	dmaengine_terminate_async(chan);
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
 // Driver attributes
 
 ssize_t picture_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
@@ -88,8 +233,6 @@ ssize_t picture_store(struct device *dev, struct device_attribute *attr, const c
 	int i;
 	unsigned buffer_size = pState->pic.nWidth*pState->pic.nHeight*sizeof(u32);
 	u8* out = (u8*)pState->pBuffer;
-	
-	//printk(KERN_INFO "Count = %u\n", count);
 	
 	if(pState->pic.state == PIC_CONFIG)
 	{
@@ -129,8 +272,8 @@ ssize_t picture_store(struct device *dev, struct device_attribute *attr, const c
 		
 		pState->pic.state = PIC_DATA;
 		pState->pic.CurPos.x = 0;
-		pState->pic.CurPos.y = 0;
-		pState->pic.CurPos.col = 0;
+		pState->pic.CurPos.y = pState->pic.nBmpHeight - 1;
+		pState->pic.CurPos.col = 2;
 
 		dev_info(dev, "Goto %u\n", pHeader->bfOffBits);
 		
@@ -146,19 +289,19 @@ ssize_t picture_store(struct device *dev, struct device_attribute *attr, const c
 		i = 0;
 		while(i < count)
 		{
-			out[(pState->pic.nBmpHeight - pState->pic.CurPos.y - 1) * pState->pic.nWidth * sizeof(u32) + \
-				(pState->pic.CurPos.x * sizeof(u32)) + (2 - pState->pic.CurPos.col)] = buf[i];
+			out[(pState->pic.CurPos.y * pState->pic.nWidth + \
+				(pState->pic.CurPos.x)) * sizeof(u32) + pState->pic.CurPos.col] = buf[i];
 			
-			pState->pic.CurPos.col++;
-			if(pState->pic.CurPos.col > 2)
+			pState->pic.CurPos.col--;
+			if(pState->pic.CurPos.col == -1)
 			{
-				pState->pic.CurPos.col = 0;
+				pState->pic.CurPos.col = 2;
 				pState->pic.CurPos.x++;				
 				if(pState->pic.CurPos.x == pState->pic.nBmpWidth)
 				{
 					pState->pic.CurPos.x = 0;
-					pState->pic.CurPos.y++;
-					if(pState->pic.CurPos.y == pState->pic.nBmpHeight)
+					pState->pic.CurPos.y--;
+					if(pState->pic.CurPos.y == -1)
 					{
 						// We are done
 						dev_info(dev, "BMP picture loaded\n");
@@ -171,17 +314,70 @@ ssize_t picture_store(struct device *dev, struct device_attribute *attr, const c
 			i++;
 		}
 		
-		dev_info(dev, "BMP loading data (%u)\n", count);
-		
 		return count;
 	}
 };
 
-static DEVICE_ATTR_WO(picture);
+ssize_t pi_cam_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct vio_state* pState = platform_get_drvdata(to_platform_device(dev));
 
+	if(buf[0] == '1')
+	{
+		if(SetRxVDMASetup(pState))
+		{
+			StartVDMA(pState->pVMDA_in);
+			pi_cam_start(pState->cam.pCam);
+			pState->cam.bEnabled = true;
+		}
+	}
+	else if(buf[0] == '0')
+	{
+		pi_cam_stop(pState->cam.pCam);
+		pState->cam.bEnabled = false;
+		StopVDMA(pState->pVMDA_in);
+		WriteBuffer(pState);
+	}
+	
+	return count;
+};
+
+ssize_t pi_cam_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct vio_state* pState = platform_get_drvdata(to_platform_device(dev));
+
+	if(pState->cam.bEnabled)
+	{
+		buf[0] = '1';
+	}
+	else
+	{
+		buf[0] = '0';
+	}
+	
+	return 1;
+};
+
+static struct device_attribute dev_attr_picture = {
+	.attr ={
+		.name = "picture",
+		.mode = S_IWUGO,
+	},
+	.store = picture_store,
+};
+
+static struct device_attribute dev_attr_pi_cam = {
+	.attr ={
+		.name = "pi_cam",
+		.mode = S_IWUGO | S_IRUGO,
+	},
+	.show = pi_cam_show,
+	.store = pi_cam_store,
+};
 
 static struct attribute *dev_attrs[] = {
 	&dev_attr_picture.attr,
+	&dev_attr_pi_cam.attr,
 	NULL,
 };
 
@@ -194,10 +390,9 @@ static struct attribute_group dev_group = {
 // Function definitions
 
 // Save Clean Up function
-void CleanUp(struct vio_state* pState)
+static void CleanUp(struct vio_state* pState)
 {
-	enum dma_status status;
-	const struct xilinx_vdma_config vdma_cfg = {
+	struct xilinx_vdma_config vdma_cfg = {
 		.frm_dly = 0,				// @frm_dly: Frame delay
 		.gen_lock = 0,				// @gen_lock: Whether in gen-lock mode
 		.master = 0,				// @master: Master that it syncs to
@@ -219,14 +414,14 @@ void CleanUp(struct vio_state* pState)
 	// Release vdma channels
 	if(pState->pVMDA_out)
 	{
-		// Stop VDMA
+		// Reset VDMA
 		xilinx_vdma_channel_set_config(pState->pVMDA_out, &vdma_cfg);
 		
 		dma_release_channel(pState->pVMDA_out);
 	}
 	if(pState->pVMDA_in)
 	{
-		// Stop VDMA
+		// Reset VDMA
 		xilinx_vdma_channel_set_config(pState->pVMDA_in, &vdma_cfg);
 		
 		dma_release_channel(pState->pVMDA_in);
@@ -238,12 +433,8 @@ void CleanUp(struct vio_state* pState)
 static int vio_probe(struct platform_device *pdev)
 {
 	struct vio_state* pState;
-	struct dma_interleaved_template dma_it;
-	struct dma_async_tx_descriptor *txd = NULL, *rxd = NULL;
-	int x,y, ret;
+	int ret;
 
-	dev_warn(&pdev->dev, "Probe started\n");
-	
 	// Allocate memory for driver structure
 	pState = devm_kzalloc(&pdev->dev, sizeof(*pState), GFP_KERNEL);
 	if(!pState)
@@ -257,128 +448,37 @@ static int vio_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "Picture Buffer allocation failed\n");
 		return -ENOMEM;
 	}
-	dev_warn(&pdev->dev, "Buffer created at %08X\n", pState->pBuffer);
 	
-	// Insert random data
-	for(y = 0; y < 720; y++)
-	{
-		for(x = 0; x < 1280; x++)
-		{
-			u8 r, g, b;
-			r = x/5;
-			g = 255 - x/5;
-			b = y/3;
-			pState->pBuffer[x+y*1280] = (r << 0) + (g << 8) + (b << 16);
-		}
-	}
+	WriteBuffer(pState);
+	
 	// Save device
 	pState->pDev = &pdev->dev;
 
+	//.............................................................................................
 	// Get Simple Test Pattern Generator
 	pState->pStpg = stpg_get(pdev->dev.of_node);
-	if(pState->pStpg == NULL || pState->pStpg == ERR_PTR(-EINVAL) || pState->pStpg == ERR_PTR(-EPROBE_DEFER))
+	if(pState->pStpg != NULL && pState->pStpg != ERR_PTR(-EINVAL) && pState->pStpg != ERR_PTR(-EPROBE_DEFER))
 	{
-		CleanUp(pState);
-		dev_err(&pdev->dev, "Failed to get stpg device (%d,%d,%d)", (int)pState->pStpg, EINVAL, EPROBE_DEFER);
-		return (int)pState->pVtc;
-	}
-	
-	// Set Resolution
-	stpg_set_resolution(pState->pStpg, 1280, 720);
-	
-	// Start Generator
-	stpg_start(pState->pStpg);
-	
-	// Get VDMA channels
-	pState->pVMDA_out = dma_request_slave_channel(&pdev->dev, "vdma_out");
-	if(!pState->pVMDA_out)
-	{
-		CleanUp(pState);
-		dev_err(&pdev->dev, "No Tx VDMA channel\n");
-		return -ENODEV ;
-	}
-	
-	pState->pVMDA_in = dma_request_slave_channel(&pdev->dev, "vdma_in");
-	if(!pState->pVMDA_in)
-	{
-		CleanUp(pState);
-		dev_err(&pdev->dev, "No Rx VDMA channel\n");
-		return -ENODEV ;
-	}
-	
-	// Configure VDMA
-	struct xilinx_vdma_config vdma_cfg = {
-		.frm_dly = 0,				// @frm_dly: Frame delay
-		.gen_lock = 0,				// @gen_lock: Whether in gen-lock mode
-		.master = 0,				// @master: Master that it syncs to
-		.frm_cnt_en = 0,			// @frm_cnt_en: Enable frame count enable
-		.park = 1,					// @park: Whether wants to park
-		.park_frm = 0,				// @park_frm: Frame to park on
-		.coalesc = 0,				// @coalesc: Interrupt coalescing threshold
-		.delay = 0,					// @delay: Delay counter
-		.reset = 0,					// @reset: Reset Channel
-		.ext_fsync = 0,				// @ext_fsync: External Frame Sync source
-	};
-	xilinx_vdma_channel_set_config(pState->pVMDA_out, &vdma_cfg);
-	
-	vdma_cfg.gen_lock = 0;
-	vdma_cfg.master = 0;
-	vdma_cfg.park = 1;
-	xilinx_vdma_channel_set_config(pState->pVMDA_in, &vdma_cfg);
-	
-	dma_it.src_start = pState->dma_addr;		// @src_start: Bus address of source for the first chunk.
-	dma_it.dir = DMA_MEM_TO_DEV;				// @dir: Specifies the type of Source and Destination.
-	dma_it.src_inc = false;						// @src_inc: If the source address increments after reading from it.
-	dma_it.src_sgl = false;						// @src_sgl: If the 'icg' of sgl[] applies to Source (scattered read).
-												// Otherwise, source is read contiguously (icg ignored).
-												// Ignored if src_inc is false.
-	dma_it.numf = 720;							// @numf: Number of frames in this template.
-	dma_it.sgl[0].size = 1280 * sizeof(u32);	// @size: Number of bytes to read from source.
-	dma_it.sgl[0].icg = 0;						// @icg: Number of bytes to jump after last src/dst address of this 
-												// chunk and before first src/dst address for next chunk.
-	dma_it.frame_size = 1;						// @frame_size: Number of chunks in a frame i.e, size of sgl[].
+		// Set Resolution
+		stpg_set_resolution(pState->pStpg, 1280, 720);
 		
-	txd = pState->pVMDA_out->device->device_prep_interleaved_dma(pState->pVMDA_out, &dma_it, DMA_CTRL_ACK);
-	if(!txd)
+		// Start Generator
+		stpg_start(pState->pStpg);
+	}
+	else
 	{
-		CleanUp(pState);
-		dev_err(&pdev->dev, "Async transaction descriptor TX invalid\n");
-		return -1;
+		// No stpg available
+		pState->pStpg = 0;
 	}
 	
-	dma_it.dst_start = pState->dma_addr;
-	dma_it.dir = DMA_DEV_TO_MEM;
-	rxd = pState->pVMDA_in->device->device_prep_interleaved_dma(pState->pVMDA_in, &dma_it, DMA_CTRL_ACK);
-	if(!rxd)
-	{
-		CleanUp(pState);
-		dev_err(&pdev->dev, "Async transaction descriptor RX invalid\n");
-		return -1;
-	}
-	
-	pState->tx_cookie = txd->tx_submit(txd);
-	if(dma_submit_error(pState->tx_cookie))
-	{
-		CleanUp(pState);
-		dev_err(&pdev->dev, "DMA TX submit error\n");
-		return -1;
-	}
-	
-	pState->rx_cookie = rxd->tx_submit(rxd);
-	if(dma_submit_error(pState->rx_cookie))
-	{
-		CleanUp(pState);
-		dev_err(&pdev->dev, "DMA RX submit error\n");
-		return -1;
-	}
-	
+	//.............................................................................................
 	// Get vtc device
 	pState->pVtc = xvtc_of_get(pdev->dev.of_node);
 	if(pState->pVtc == NULL || pState->pVtc == ERR_PTR(-EINVAL) || pState->pVtc == ERR_PTR(-EPROBE_DEFER))
 	{
 		CleanUp(pState);
 		dev_err(&pdev->dev, "Failed to get vtc device (%d,%d,%d)", (int)pState->pVtc, EINVAL, EPROBE_DEFER);
-		return (int)pState->pVtc;
+		return -ENODEV;
 	}
 	
 	// Setup vtc config
@@ -402,8 +502,51 @@ static int vio_probe(struct platform_device *pdev)
 		return ret;
 	}
 	
-	dma_async_issue_pending(pState->pVMDA_in);
-	dma_async_issue_pending(pState->pVMDA_out);
+	//.............................................................................................
+	// Get VDMA channels
+	pState->pVMDA_out = dma_request_slave_channel(&pdev->dev, "vdma_out");
+	if(!pState->pVMDA_out)
+	{
+		dev_err(&pdev->dev, "No Tx VDMA channel\n");
+		CleanUp(pState);
+		return -ENODEV ;
+	}
+	
+	pState->pVMDA_in = dma_request_slave_channel(&pdev->dev, "vdma_in");
+	if(!pState->pVMDA_in)
+	{
+		dev_err(&pdev->dev, "No Rx VDMA channel\n");
+		CleanUp(pState);
+		return -ENODEV ;
+	}
+	
+	// Configure VDMAs
+	SetTxVDMAConfig(pState);
+	SetRxVDMAConfig(pState);
+	
+	// Setup VDMA channels
+	if(!SetTxVDMASetup(pState) || !SetRxVDMASetup(pState))
+	{
+		dev_err(&pdev->dev, "Setup VDMA channels failed\n");	
+		CleanUp(pState);
+		return -ENODEV;
+	}
+	
+	StartVDMA(pState->pVMDA_out);
+	
+	//.............................................................................................
+	// Get Camera I2C Interface
+	pState->cam.pCam = pi_cam_get(pdev->dev.of_node);
+	if(pState->cam.pCam == NULL || pState->cam.pCam == ERR_PTR(-EINVAL) || pState->cam.pCam == ERR_PTR(-EPROBE_DEFER))
+	{
+		CleanUp(pState);
+		dev_err(&pdev->dev, "Failed to get pi-cam I2C device");
+		return -ENODEV;		
+	}
+	
+	// Reset Camera
+	pi_cam_stop(pState->cam.pCam);
+	pState->cam.bEnabled = false;
 	
 	// Set driver data
 	pState->pic.state = PIC_CONFIG;
@@ -425,6 +568,9 @@ static int vio_probe(struct platform_device *pdev)
 static int vio_remove(struct platform_device *pdev)
 {
 	struct vio_state* pState = platform_get_drvdata(pdev);
+	
+	// stop Camera
+	pi_cam_stop(pState->cam.pCam);
 	
 	CleanUp(pState);
 	

@@ -14,10 +14,13 @@ start_it_up()
   # Give write access to fpga for php
   chmod a+w /sys/class/fpga_manager/fpga0/firmware
 
-  # Create Links for Examples - maybe some were deleted - should never be the case
+  # Delete all old symbolic links
+  find /lib/firmware -type l -delete
+
+  # Create Links for Examples
   for file in `ls /home/firmware`
   do
-    ln -s -f /home/firmware/${file} /lib/firmware/${file}
+    ln -s -f /home/median.demonstrator.internal/firmware/${file} /lib/firmware/${file}
   done
 
   # Mount config filesystem for overlays
@@ -27,8 +30,11 @@ start_it_up()
   mkdir /config/device-tree/overlays/fclk
   cp /home/median.demonstrator.internal/dt-overlay/fclk/fclk.dtbo /config/device-tree/overlays/fclk/dtbo
   
-  #Probe the driver
+  # Probe the driver
   modprobe fclk
+  modprobe stpg
+  modprobe pi-cam
+  modprobe vio
 }
 
 shut_it_down()

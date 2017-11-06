@@ -11,7 +11,7 @@
 			vio_0: vio {
 				compatible = "jf,vio-1.0.0";
 				
-				cam = <&i2c_pi_cam>;
+				jf,pi_cam = <&i2c_pi_cam>;
 				jf,stpg = <&stpg_0>;
 				xlnx,vtc = <&vtc_0>;
 				dmas = <&axi_vdma_out 0 &axi_vdma_in 0>;

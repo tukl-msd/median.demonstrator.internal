@@ -28,7 +28,7 @@ function get_bitstream() {
     return $bit;
 }
 
-function build_table($array){
+function build_table_bitstream($array){
     // data rows
     foreach( $array as $key => $value){
         echo '<tr>';
@@ -56,7 +56,7 @@ function build_table($array){
 
 function start_bitstream($name) {
  // echo '/var/www/scripts/load_bitstream.sh ' . $name;
-  $ret = exec('/var/www/scripts/load_bitstream.sh ' . $name);
+  $ret = exec('sudo /var/www/scripts/load_bitstream.sh ' . $name);
  // echo $ret;
   if ($ret != 'operating') {
     echo '<script language="javascript">alert("Error loading bitstream '.$name.' - '.$ret.'")</script>';

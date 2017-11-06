@@ -2,7 +2,6 @@
 #include <linux/init.h>				// included for __init and __exit macros
 #include <linux/platform_device.h>
 #include <linux/export.h>
-#include <linux/i2c.h>
 
 #define PI_CAM_NO_EXPORT
 #include "pi-cam.h"
@@ -10,7 +9,7 @@
 
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Johannes Feldmann");
-MODULE_DESCRIPTION("Simple Test Pattern Generator Driver");
+MODULE_DESCRIPTION("I2C Driver for configuration of the Raspberry Pi Cam");
 
 
 #define CAMERA_V1_3_IIC_ADDRESS		0x36
@@ -22,11 +21,11 @@ MODULE_DESCRIPTION("Simple Test Pattern Generator Driver");
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Devicetree structures
 /*
-i2c_pi_cam: pi_cam@50 {
+i2c_pi_cam: pi_cam@10 {
 	compatible = "jf,pi_cam-1.0.0";
 	#address-cells = <1>;
 	#size-cells = <0>;
-	reg = <50>;
+	reg = <10>;
 };
 */
 
@@ -41,11 +40,11 @@ static DEFINE_MUTEX(pi_cam_lock);
 
 //-------------------------------------------------------------------------------------------------
 // Get device / Put device
-static struct pi_cam_device* pi_cam_get(struct device_node* np)
+static struct i2c_client* pi_cam_get(struct device_node* np)
 {
 	struct device_node *pi_cam_node;
-	struct pi_cam_device *found = NULL;
-	struct pi_cam_device *pi_cam;
+	struct i2c_client *found = NULL;
+	struct i2c_client *pi_cam;
 
 	if(!of_find_property(np, "jf,pi_cam", NULL))
 	{
@@ -57,8 +56,8 @@ static struct pi_cam_device* pi_cam_get(struct device_node* np)
 		return ERR_PTR(-EINVAL);
 
 	mutex_lock(&pi_cam_lock);
-	list_for_each_entry(pi_cam, &pi_cam_list, list) {
-		if (pi_cam->pDev->of_node == pi_cam_node) {
+	list_for_each_entry(pi_cam, &pi_cam_list, detected) {
+		if (pi_cam->dev.of_node == pi_cam_node) {
 			found = pi_cam;
 			break;
 		}
@@ -74,7 +73,7 @@ static struct pi_cam_device* pi_cam_get(struct device_node* np)
 }
 EXPORT_SYMBOL_GPL(pi_cam_get);
 
-static void pi_cam_put(struct pi_cam_device *pDevice)
+static void pi_cam_put(struct i2c_client *pDevice)
 {
 }
 EXPORT_SYMBOL_GPL(pi_cam_put);
@@ -112,16 +111,28 @@ static int pi_cam_read(struct i2c_client *client, u16 reg, u8* data)
 
 static bool pi_cam_check_1_3(struct i2c_client *client)
 {
-	u8 data = 0;
+	u8 data[2] = {0, 0};
 	int ret;
 	
-	ret = pi_cam_read(client, CS_CMMN_CHIP_ID_H, &data);
+	ret = pi_cam_read(client, CS_CMMN_CHIP_ID_H, &data[0]);
+	if(ret != 2)
+	{
+		dev_err(&client->dev, "Reading CS_CMMN_CHIP_ID_H failed\n");
+		return false;
+	}
 	
-	dev_warn(&client->dev, "pi_cam_check_1_3: data: %02X ret: %d\n", data, ret);
+	ret = pi_cam_read(client, CS_CMMN_CHIP_ID_L, &data[1]);
+	if(ret != 2)
+	{
+		dev_err(&client->dev, "Reading CS_CMMN_CHIP_ID_L failed\n");
+		return false;
+	}
 	
-	ret = pi_cam_read(client, CS_CMMN_CHIP_ID_L, &data);
-	
-	dev_warn(&client->dev, "pi_cam_check_1_3: data: %02X ret: %d\n", data, ret);
+	if(data[0] != 0x56 || data[1] != 0x47)
+	{
+		dev_err(&client->dev, "ID of RPI Cam wrong (%02X%02X)\n", data[0], data[1]);		
+		return false;
+	}
 	
 	return true;
 }
@@ -218,7 +229,7 @@ static bool pi_cam_imx219_crop(struct i2c_client *client, struct sensor_rect cro
 	return true;
 }
 
-static bool pi_cam_write_cfg(struct i2c_client *client, struct sensor_cmd* set)
+static bool pi_cam_write_cfg(struct i2c_client *client, const struct sensor_cmd* set)
 {
 	int i;
 	for(i=0; set[i].reg != TABLE_END; i++)
@@ -232,32 +243,44 @@ static bool pi_cam_write_cfg(struct i2c_client *client, struct sensor_cmd* set)
 //-------------------------------------------------------------------------------------------------
 // Device usage
 
-static int pi_cam_set_resolution(struct pi_cam_device *pDevice, unsigned width, unsigned height)
+static bool pi_cam_start(struct i2c_client *pDevice)
 {
-	return 0;
-}
-EXPORT_SYMBOL_GPL(pi_cam_set_resolution);
-
-static int pi_cam_start(struct pi_cam_device *pDevice)
-{
-	return 0;
+	if(pDevice->addr == 0x10)
+	{
+		// Version 2.1
+		return pi_cam_write_cfg(pDevice, imx219_start);
+	}
+	
+	return false;
 }
 EXPORT_SYMBOL_GPL(pi_cam_start);
+
+static int pi_cam_stop(struct i2c_client *pDevice)
+{
+	if(pDevice->addr == 0x10)
+	{
+		// Version 2.1
+		return pi_cam_write_cfg(pDevice, imx219_stop);
+	}
+	
+	return false;
+}
+EXPORT_SYMBOL_GPL(pi_cam_stop);
 
 //-------------------------------------------------------------------------------------------------
 // Registration and Unregistration
  
-static void pi_cam_register_device(struct pi_cam_device *pDevice)
+static void pi_cam_register_device(struct i2c_client *client)
 {
 	mutex_lock(&pi_cam_lock);
-	list_add_tail(&pDevice->list, &pi_cam_list);
+	list_add_tail(&client->detected, &pi_cam_list);
 	mutex_unlock(&pi_cam_lock);
 }
 
-static void pi_cam_unregister_device(struct pi_cam_device *pDevice)
+static void pi_cam_unregister_device(struct i2c_client *client)
 {
 	mutex_lock(&pi_cam_lock);
-	list_del(&pDevice->list);
+	list_del(&client->detected);
 	mutex_unlock(&pi_cam_lock);
 }
 
@@ -266,43 +289,37 @@ static void pi_cam_unregister_device(struct pi_cam_device *pDevice)
  
 static int pi_cam_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
-  struct device *dev = &client->dev;
-	struct pi_cam_device* pData;
+	struct device *dev = &client->dev;
 
-	dev_warn(dev, "Probe of %s (0x%2X) starting\n", client->name, client->addr);
-
+	// Check functionality of the I2C Bus
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C))
 	{
 		dev_err(dev, "I2C functionality check failed\n");
 		return -ENODEV;
 	}
-	
-	if(pi_cam_check_2_1(client))
+
+	// Check V1.3 Cam
+	if(client->addr == CAMERA_V1_3_IIC_ADDRESS && pi_cam_check_1_3(client))
+	{
+		dev_err(dev, "Camera version 1.3 currently not supported");
+		return -ENODEV;
+	}
+	// Check V2.1 Cam
+	else if(client->addr == CAMERA_V2_1_IIC_ADDRESS && pi_cam_check_2_1(client))
 	{
 		pi_cam_imx219_crop(client, imx219_center_1280x720_rect);
 		pi_cam_write_cfg(client, imx219_720p_regs);
-		//pi_cam_write_cfg(client, imx219_test_color_bar);
-		pi_cam_write_cfg(client, imx219_start);
-		
 	}
-	
-	// Allocate memory for driver structure
-	/*pDevice = devm_kzalloc(&pdev->dev, sizeof(*pDevice), GFP_KERNEL);
-	if(!pDevice)
+	else
 	{
-		dev_err(&pdev->dev, "Allocation error\n");
-		return -ENOMEM;
+		// No Camera found
+		dev_err(dev, "No Camera found\n");
+		return -ENODEV;
 	}
-	
-	// Save device
-	pDevice->pDev = &pdev->dev;
-	
-	// Set driver data
-	platform_set_drvdata(pdev, pDevice);	
-
+		
 	// Register device
-	pi_cam_register_device(pDevice);
-	*/
+	pi_cam_register_device(client);
+	
 	dev_warn(dev, "Probe successful\n");
 	
 	return 0;
@@ -310,10 +327,9 @@ static int pi_cam_probe(struct i2c_client *client, const struct i2c_device_id *i
 
 static int pi_cam_remove(struct i2c_client *client)
 {
-	/*struct pi_cam_device* pDevice = platform_get_drvdata(pdev);
-
-	pi_cam_unregister_device(pDevice);
-	*/
+	// Unregister device
+	pi_cam_unregister_device(client);
+	
 	dev_info(&client->dev, "Removal successful\n");
 
 	return 0;
