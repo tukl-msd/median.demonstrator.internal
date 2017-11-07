@@ -5,16 +5,16 @@ if(isset($_POST["cam_toggle"])) {
 }
 
 function is_cam_enabled() {
-    $ret = exec("cat /sys/devices/platform/vio/pi_cam");
+    $ret = exec("sudo cat /sys/devices/platform/vio/pi_cam");
 	return $ret;
 }
 
 function cam_toggle() {
 	if(is_cam_enabled()[0] == '1') {
-		exec("echo 0 > /sys/devices/platform/vio/pi_cam");
+		exec('sudo /var/www/scripts/camera.sh 0');
 	}
 	else {
-		exec("echo 1 > /sys/devices/platform/vio/pi_cam");
+		exec('sudo /var/www/scripts/camera.sh 1');
 	}
 }
 
@@ -25,7 +25,6 @@ function print_cam_enable() {
 	else {
 		$state = "Enable";
 	}
-	
 	echo '
     <!-- Die Encoding-Art enctype MUSS wie dargestellt angegeben werden -->
     <form enctype="multipart/form-data" action="?cam_toggle" method="POST">

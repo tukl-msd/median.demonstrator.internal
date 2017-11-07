@@ -6,7 +6,7 @@ if(isset($_POST["upload"])) {
         echo "empty";
     } else {
         $target_file = basename($_FILES["fileToUpload"]["name"]);
-        echo $target_file . "</br>";
+        //echo $target_file . "</br>";
         check_upload();
     }
     // header("Location: " . $_SERVER['REQUEST_URI']);
@@ -40,7 +40,7 @@ function check_upload() {
     // if everything is ok, try to upload file
     } else {
         if (move_uploaded_file($_FILES["fileToUpload"]["tmp_name"], $target_file)) {
-            echo "The file ". basename( $_FILES["fileToUpload"]["name"]). " has been uploaded.";
+            //echo "The file ". basename( $_FILES["fileToUpload"]["name"]). " has been uploaded.";
         } else {
             echo "Sorry, there was an error uploading your file.";
         }

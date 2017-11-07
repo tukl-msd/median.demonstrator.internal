@@ -1,16 +1,13 @@
 <?php
 
-//include 'camera.php';
-
 if(isset($_POST["show_picture"])) {
     show_picture($_POST["show_picture"]);
-    // header("Location: " . $_SERVER['REQUEST_URI']);
 }
 
 function get_pictures() {   
     $bit = array();
 
-    // Files in /lib/firmware
+    // Files in /home/median.demonstrator.internal/pictures/
     if ($handle = opendir('/home/median.demonstrator.internal/pictures/')) {
         
         // Einträge erstellen
@@ -42,10 +39,11 @@ function build_table_pictures($array){
 
 function show_picture($name) {
 	if(is_cam_enabled()[0] == '1') {
-		exec("echo 0 > /sys/devices/platform/vio/pi_cam");
+		exec('sudo /var/www/scripts/camera.sh 0');
 	}
 	
-	$ret = exec('cp /home/median.demonstrator.internal/pictures/' . $name . ' /sys/devices/platform/vio/picture');
+	
+	$ret = exec('sudo cp /home/median.demonstrator.internal/pictures/' . $name . ' /sys/devices/platform/vio/picture');
 }
 
 ?>
