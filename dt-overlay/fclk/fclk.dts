@@ -11,7 +11,7 @@
 				compatible = "jf,fclk-1.0.0";
 				
 				clocks = <&clkc 15>;
-				freq-in-hz = <160000000>;
+				freq-in-hz = <150000000>;
 			};
 			fclk_1: fclk1 {
 				compatible = "jf,fclk-1.0.0";
