@@ -10,6 +10,7 @@ include 'bitstream.php';
 include 'upload.php';
 include 'camera.php';
 include 'pictures.php';
+include 'shutdown.php';
 ?> 
 <br>
 <h2>Available Bitstreams:</h2>
@@ -39,5 +40,8 @@ include 'pictures.php';
 		<?php build_table_pictures(get_pictures()); ?>
 	</tbody>
 </table>
+
+<p><?php print_shutdown(); ?></p>
+
 </body>
 </html>
