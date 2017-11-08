@@ -18,7 +18,7 @@ start_it_up()
   find /lib/firmware -type l -delete
 
   # Create Links for Examples
-  for file in `ls /home/firmware`
+  for file in `ls /home/median.demonstrator.internal/firmware`
   do
     ln -s -f /home/median.demonstrator.internal/firmware/${file} /lib/firmware/${file}
   done
