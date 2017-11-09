@@ -40,6 +40,8 @@ start_it_up()
 shut_it_down()
 {
   # Delete overlay fclk.dtbo
+  rmdir /config/device-tree/overlays/vio
+  rmdir /config/device-tree/overlays/median
   rmdir /config/device-tree/overlays/fclk
   
   # Unmount config filesystem
