@@ -9,12 +9,6 @@ function shutdown() {
 }
 
 function print_shutdown() {
-	if(is_cam_enabled() == '1') {
-		$state = "Disable";
-	}
-	else {
-		$state = "Enable";
-	}
 	echo '
     <!-- Die Encoding-Art enctype MUSS wie dargestellt angegeben werden -->
     <form enctype="multipart/form-data" action="?shutdown" method="POST">
