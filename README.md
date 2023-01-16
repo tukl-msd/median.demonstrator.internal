@@ -1,3 +1,7 @@
+# **PROJECT MOVED**
+This project orignally hosted on https://github.com/tukl-msd/median.demonstrator.internal has now moved an is no longer maintained in this location.
+Please go to https://gitlab.rhrk.uni-kl.de/EIT/ZynqVision/eit.zynqvision.internal for the latest version.
+
 # median.demonstrator.internal
 Content of the Zynqberry. 
 
